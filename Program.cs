@@ -12,15 +12,14 @@ namespace BaderDiscordBot
     {
         private DiscordSocketClient _client;
         private AutoRoleService _autoRoleService;
+        private TicketService _ticketService;
 
         static void Main(string[] args) => new Program().MainAsync().GetAwaiter().GetResult();
 
         public async Task MainAsync()
         {
-            // 1. تشغيل سيرفر الويب المصغر في الخلفية لإبقاء البوت شغالاً على Render 24/7
             StartHttpServer();
 
-            // 2. ضبط صلاحيات البوت (Gateway Intents)
             var config = new DiscordSocketConfig
             {
                 GatewayIntents = GatewayIntents.Guilds |
@@ -31,18 +30,34 @@ namespace BaderDiscordBot
 
             _client = new DiscordSocketClient(config);
             _client.Log += LogAsync;
+            _client.MessageReceived += OnMessageReceivedAsync;
 
-            // 3. ربط ملفات الخدمات (Services Initialization)
+            // 🔗 تهيئة الخدمات المضافة
             _autoRoleService = new AutoRoleService(_client);
+            _ticketService = new TicketService(_client);
 
-            // 4. قراءة توكين البوت من متغيرات البيئة في Render
             string botToken = Environment.GetEnvironmentVariable("BOT_TOKEN") ?? "YOUR_BOT_TOKEN_HERE";
 
             await _client.LoginAsync(TokenType.Bot, botToken);
             await _client.StartAsync();
 
-            Console.WriteLine("⚡ بوت BaderDiscordBot يعمل الآن بنجاح بالهيكلية الجديدة!");
+            Console.WriteLine("⚡ بوت BaderDiscordBot يعمل الآن متضمناً خدمة التيكتات والرتب!");
             await Task.Delay(-1);
+        }
+
+        private async Task OnMessageReceivedAsync(SocketMessage message)
+        {
+            if (message.Author.IsBot) return;
+
+            // أمر إرسال بنل التيكتات في القناة الحالية
+            if (message.Content.ToLower() == "!setup-ticket")
+            {
+                if (message.Channel is SocketTextChannel textChannel)
+                {
+                    await _ticketService.SendTicketPanelAsync(textChannel);
+                    await message.DeleteAsync(); // حذف أمر الإرسال لإبقاء الشات نظيفاً
+                }
+            }
         }
 
         private static void StartHttpServer()
