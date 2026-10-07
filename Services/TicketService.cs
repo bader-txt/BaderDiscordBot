@@ -10,6 +10,9 @@ namespace BaderDiscordBot.Services
     {
         private readonly DiscordSocketClient _client;
 
+        // 📌 ضع آيدي (ID) قناة التعليمات/الطلبات هنا
+        private const ulong InstructionsChannelId = 1557489097562652824; 
+
         public TicketService(DiscordSocketClient client)
         {
             _client = client;
@@ -31,81 +34,87 @@ namespace BaderDiscordBot.Services
             await channel.SendMessageAsync(embed: embed, components: builder.Build());
         }
 
-        private async Task OnButtonExecutedAsync(SocketMessageComponent component)
+        // ⚡ معالجة الأزرار في خيط خلفي موازٍ لمنع حظر خيط الاتصال الرئيسي (Gateway Thread)
+        private Task OnButtonExecutedAsync(SocketMessageComponent component)
         {
-            try
+            _ = Task.Run(async () =>
             {
-                if (component.Data.CustomId == "create_tweak_ticket")
+                try
                 {
-                    await component.DeferAsync(ephemeral: true);
-
-                    var guild = (component.Channel as SocketGuildChannel)?.Guild;
-                    var user = component.User as SocketGuildUser;
-
-                    if (guild == null || user == null) return;
-
-                    string cleanUsername = user.Username.ToLower().Replace(" ", "-");
-                    string channelName = $"tweak-{cleanUsername}";
-
-                    var existingChannel = guild.TextChannels.FirstOrDefault(c => c.Name == channelName);
-                    if (existingChannel != null)
+                    if (component.Data.CustomId == "create_tweak_ticket")
                     {
-                        await component.FollowupAsync($"❌ لديك تيكت مفتوح بالفعل هنا: {existingChannel.Mention}", ephemeral: true);
-                        return;
-                    }
+                        // تأكيد الاستجابة فوراً لمنع خطأ 3 ثوانٍ
+                        await component.DeferAsync(ephemeral: true);
 
-                    string categoryName = "🎫 | تيكتات التويك";
-                    var category = guild.CategoryChannels.FirstOrDefault(c => c.Name.Equals(categoryName, StringComparison.OrdinalIgnoreCase));
-                    
-                    if (category == null)
-                    {
-                        category = await guild.CreateCategoryAsync(categoryName);
-                    }
+                        var guild = (component.Channel as SocketGuildChannel)?.Guild;
+                        var user = component.User as SocketGuildUser;
 
-                    var ticketChannel = await guild.CreateTextChannelAsync(channelName, tcp =>
-                    {
-                        tcp.CategoryId = category.Id;
-                        tcp.PermissionOverwrites = new[]
+                        if (guild == null || user == null) return;
+
+                        string cleanUsername = user.Username.ToLower().Replace(" ", "-");
+                        string channelName = $"tweak-{cleanUsername}";
+
+                        var existingChannel = guild.TextChannels.FirstOrDefault(c => c.Name == channelName);
+                        if (existingChannel != null)
                         {
-                            new Overwrite(guild.EveryoneRole.Id, PermissionTarget.Role, new OverwritePermissions(viewChannel: PermValue.Deny)),
-                            new Overwrite(user.Id, PermissionTarget.User, new OverwritePermissions(
-                                viewChannel: PermValue.Allow,
-                                sendMessages: PermValue.Allow,
-                                attachFiles: PermValue.Allow,
-                                readMessageHistory: PermValue.Allow))
-                        };
-                    });
+                            await component.FollowupAsync($"❌ لديك تيكت مفتوح بالفعل هنا: {existingChannel.Mention}", ephemeral: true);
+                            return;
+                        }
 
-                    // 📝 الرسالة الترحيبية المحدثة
-                    var welcomeEmbed = new EmbedBuilder()
-                        .WithTitle($"🎫 أهلاً بك يا {user.Username} في تيكت التويك")
-                        .WithDescription("قبل أن نبدأ الشغل، يرجى التوجه إلى <#1557489097562652824>" ومتابعة التعليمات والطلبات المذكورة هناك، وسيقوم الدعم بالرد عليك فوراً.\n\nلإغلاق التيكت بعد الانتهاء، اضغط على الزر أدناه.")
-                        .WithColor(Color.Green)
-                        .Build();
+                        string categoryName = "🎫 | تيكتات التويك";
+                        var category = guild.CategoryChannels.FirstOrDefault(c => c.Name.Equals(categoryName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (category == null)
+                        {
+                            category = await guild.CreateCategoryAsync(categoryName);
+                        }
 
-                    var closeButton = new ComponentBuilder()
-                        .WithButton("🔒 إغلاق التيكت", "close_ticket", ButtonStyle.Danger, new Emoji("🛑"));
+                        var ticketChannel = await guild.CreateTextChannelAsync(channelName, tcp =>
+                        {
+                            tcp.CategoryId = category.Id;
+                            tcp.PermissionOverwrites = new[]
+                            {
+                                new Overwrite(guild.EveryoneRole.Id, PermissionTarget.Role, new OverwritePermissions(viewChannel: PermValue.Deny)),
+                                new Overwrite(user.Id, PermissionTarget.User, new OverwritePermissions(
+                                    viewChannel: PermValue.Allow,
+                                    sendMessages: PermValue.Allow,
+                                    attachFiles: PermValue.Allow,
+                                    readMessageHistory: PermValue.Allow))
+                            };
+                        });
 
-                    await ticketChannel.SendMessageAsync(text: $"{user.Mention}", embed: welcomeEmbed, components: closeButton.Build());
+                        var welcomeEmbed = new EmbedBuilder()
+                            .WithTitle($"🎫 أهلاً بك يا {user.Username} في تيكت التويك")
+                            .WithDescription($"قبل أن نبدأ الشغل، يرجى التوجه إلى <#{InstructionsChannelId}> ومتابعة التعليمات والطلبات المذكورة هناك، وسيقوم الدعم بالرد عليك فوراً.\n\nلإغلاق التيكت بعد الانتهاء، اضغط على الزر أدناه.")
+                            .WithColor(Color.Green)
+                            .Build();
 
-                    await component.FollowupAsync($"✅ تم إنشاء التيكت الخاص بك بنجاح في فئة التيكتات: {ticketChannel.Mention}", ephemeral: true);
-                }
-                else if (component.Data.CustomId == "close_ticket")
-                {
-                    await component.DeferAsync(ephemeral: true);
-                    await component.FollowupAsync("🔒 سيتم حذف وإغلاق هذا التيكت خلال 5 ثوانٍ...", ephemeral: true);
-                    await Task.Delay(5000);
+                        var closeButton = new ComponentBuilder()
+                            .WithButton("🔒 إغلاق التيكت", "close_ticket", ButtonStyle.Danger, new Emoji("🛑"));
 
-                    if (component.Channel is SocketTextChannel channel)
+                        await ticketChannel.SendMessageAsync(text: $"{user.Mention}", embed: welcomeEmbed, components: closeButton.Build());
+
+                        await component.FollowupAsync($"✅ تم إنشاء التيكت الخاص بك بنجاح في فئة التيكتات: {ticketChannel.Mention}", ephemeral: true);
+                    }
+                    else if (component.Data.CustomId == "close_ticket")
                     {
-                        await channel.DeleteAsync();
+                        await component.DeferAsync(ephemeral: true);
+                        await component.FollowupAsync("🔒 سيتم حذف وإغلاق هذا التيكت خلال 5 ثوانٍ...", ephemeral: true);
+                        await Task.Delay(5000);
+
+                        if (component.Channel is SocketTextChannel channel)
+                        {
+                            await channel.DeleteAsync();
+                        }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[TicketService Error]: {ex.Message}");
-            }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[TicketService Error]: {ex.Message}");
+                }
+            });
+
+            return Task.CompletedTask;
         }
     }
 }
