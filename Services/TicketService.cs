@@ -14,10 +14,14 @@ namespace BaderDiscordBot.Services
         // 📌 آيدي (ID) قناة التعليمات والطلبات المخصصة
         private const ulong InstructionsChannelId = 1557489097562652824;
 
+        // 📌 ضع آيدي (ID) قناة التقييمات (client-reviews) هنا
+        private const ulong ClientReviewsChannelId = 1557174092744892476; 
+
         public TicketService(DiscordSocketClient client)
         {
             _client = client;
             _client.ButtonExecuted += OnButtonExecutedAsync;
+            _client.ModalSubmitted += OnModalSubmittedAsync; // تسجيل حدث استقبال النوافذ المنبثقة
         }
 
         /// <summary>
@@ -39,7 +43,7 @@ namespace BaderDiscordBot.Services
         }
 
         /// <summary>
-        /// معالجة ضغطات الأزرار بخيط خلفي لتفادي حظر Gateway والرد الفوري
+        /// معالجة ضغطات الأزرار
         /// </summary>
         private Task OnButtonExecutedAsync(SocketMessageComponent component)
         {
@@ -47,10 +51,9 @@ namespace BaderDiscordBot.Services
             {
                 try
                 {
-                    // 1️⃣ عند ضغط زر فتح التيكت
+                    // 1️⃣ فتح التيكت
                     if (component.Data.CustomId == "create_tweak_ticket")
                     {
-                        // ⚡ استجابة فورية لتجنب خطأ انتهاء المهلة (3 ثوانٍ)
                         await component.DeferAsync(ephemeral: true);
 
                         var guild = (component.Channel as SocketGuildChannel)?.Guild;
@@ -58,13 +61,11 @@ namespace BaderDiscordBot.Services
 
                         if (guild == null || user == null) return;
 
-                        // 🧼 تنظيف اسم العضو ليقبل كمسمى قناة قانوني في ديسكورد
                         string cleanUsername = Regex.Replace(user.Username.ToLower(), @"[^a-z0-9]", "");
                         if (string.IsNullOrEmpty(cleanUsername)) cleanUsername = user.Id.ToString();
 
                         string channelName = $"tweak-{cleanUsername}";
 
-                        // فحص وجود تيكت سابق مفتوح لنفس العميل
                         var existingChannel = guild.TextChannels.FirstOrDefault(c => c.Name == channelName);
                         if (existingChannel != null)
                         {
@@ -72,31 +73,25 @@ namespace BaderDiscordBot.Services
                             return;
                         }
 
-                        // 📂 البحث عن فئة التيكتات أو إنشاؤها (باستخدام ICategoryChannel لتفادي خطأ CS0029)
                         string categoryName = "🎫 | تيكتات التويك";
                         ICategoryChannel category = guild.CategoryChannels.FirstOrDefault(c => c.Name.Equals(categoryName, StringComparison.OrdinalIgnoreCase));
 
                         if (category == null)
                         {
-                            // استخدام CreateCategoryChannelAsync لتفادي خطأ CS1061
                             category = await guild.CreateCategoryChannelAsync(categoryName);
                         }
 
-                        // 📝 إنشاء روم التيكت وتخصيص الصلاحيات بالفئة
                         var ticketChannel = await guild.CreateTextChannelAsync(channelName, tcp =>
                         {
                             tcp.CategoryId = category.Id;
                             tcp.PermissionOverwrites = new[]
                             {
-                                // إخفاء القناة عن باقي الأعضاء
                                 new Overwrite(guild.EveryoneRole.Id, PermissionTarget.Role, new OverwritePermissions(viewChannel: PermValue.Deny)),
-                                // إظهار القناة للعميل صاحب التيكت
                                 new Overwrite(user.Id, PermissionTarget.User, new OverwritePermissions(
                                     viewChannel: PermValue.Allow,
                                     sendMessages: PermValue.Allow,
                                     attachFiles: PermValue.Allow,
                                     readMessageHistory: PermValue.Allow)),
-                                // إظهار القناة للبوت نفسه
                                 new Overwrite(_client.CurrentUser.Id, PermissionTarget.User, new OverwritePermissions(
                                     viewChannel: PermValue.Allow,
                                     sendMessages: PermValue.Allow,
@@ -104,20 +99,33 @@ namespace BaderDiscordBot.Services
                             };
                         });
 
-                        // الرسالة الترحيبية داخل التيكت مع الإشارة للروم المحدد
                         var welcomeEmbed = new EmbedBuilder()
                             .WithTitle($"🎫 أهلاً بك يا {user.Username} في تيكت التويك")
-                            .WithDescription($"قبل أن نبدأ الشغل، يرجى التوجه إلى <#{InstructionsChannelId}> ومتابعة التعليمات والطلبات المذكورة هناك، وسيقوم الدعم بالرد عليك فوراً.\n\nلإغلاق التيكت بعد الانتهاء، اضغط على الزر أدناه.")
+                            .WithDescription($"قبل أن نبدأ الشغل، يرجى التوجه إلى <#{InstructionsChannelId}> ومتابعة التعليمات والطلبات المذكورة هناك، وسيقوم الدعم بالرد عليك فوراً.\n\nيمكنك تقييم الخدمة أو إغلاق التيكت عبر الأزرار أدناه.")
                             .WithColor(Color.Green)
                             .Build();
 
-                        var closeButton = new ComponentBuilder()
+                        // 🔘 أزرار التيكت: زر التقييم + زر الإغلاق
+                        var actionButtons = new ComponentBuilder()
+                            .WithButton("⭐ تقييم الخدمة", "rate_ticket", ButtonStyle.Success, new Emoji("⭐"))
                             .WithButton("🔒 إغلاق التيكت", "close_ticket", ButtonStyle.Danger, new Emoji("🛑"));
 
-                        await ticketChannel.SendMessageAsync(text: $"{user.Mention}", embed: welcomeEmbed, components: closeButton.Build());
-                        await component.FollowupAsync($"✅ تم إنشاء التيكت الخاص بك بنجاح في فئة التيكتات: {ticketChannel.Mention}", ephemeral: true);
+                        await ticketChannel.SendMessageAsync(text: $"{user.Mention}", embed: welcomeEmbed, components: actionButtons.Build());
+                        await component.FollowupAsync($"✅ تم إنشاء التيكت الخاص بك بنجاح: {ticketChannel.Mention}", ephemeral: true);
                     }
-                    // 2️⃣ عند ضغط زر إغلاق التيكت
+                    // 2️⃣ ضغط زر التقييم (إظهار نافذة التقييم المنبثقة)
+                    else if (component.Data.CustomId == "rate_ticket")
+                    {
+                        var modal = new ModalBuilder()
+                            .WithTitle("⭐ تقييم جلسة التويك - BaderTweaker")
+                            .WithCustomId("tweak_review_modal")
+                            .AddTextInput("عدد النجوم (اختر من 1 إلى 5)", "star_rating", TextInputStyle.Short, placeholder: "اكتب رقماً من 1 إلى 5", required: true, maxLength: 1)
+                            .AddTextInput("رأيك وانطباعك عن التويك", "review_feedback", TextInputStyle.Paragraph, placeholder: "اكتب رأيك وتجربتك بعد الجلسة بالتفصيل...", required: true);
+
+                        // إظهار النافذة للمستخدم (ملاحظة: لا يُستخدم DeferAsync قبل إظهار Modal)
+                        await component.RespondWithModalAsync(modal.Build());
+                    }
+                    // 3️⃣ إغلاق التيكت
                     else if (component.Data.CustomId == "close_ticket")
                     {
                         await component.DeferAsync(ephemeral: true);
@@ -127,7 +135,6 @@ namespace BaderDiscordBot.Services
                             await component.FollowupAsync("🔒 سيتم حذف وإغلاق هذا التيكت خلال 5 ثوانٍ...", ephemeral: true);
                             await Task.Delay(5000);
 
-                            // التأكد من وجود القناة قبل الحذف لمنع الأخطاء الاستثنائية
                             var checkChannel = _client.GetChannel(channel.Id);
                             if (checkChannel != null)
                             {
@@ -138,7 +145,73 @@ namespace BaderDiscordBot.Services
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[TicketService Error]: {ex.Message}");
+                    Console.WriteLine($"[TicketService Button Error]: {ex.Message}");
+                }
+            });
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// معالجة استلام تقييم العميل ونشره في شات client-reviews
+        /// </summary>
+        private Task OnModalSubmittedAsync(SocketModal modal)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (modal.Data.CustomId == "tweak_review_modal")
+                    {
+                        await modal.DeferAsync(ephemeral: true);
+
+                        var guild = (modal.Channel as SocketGuildChannel)?.Guild;
+                        var user = modal.User;
+
+                        if (guild == null) return;
+
+                        // استخراج المدخلات من النموذج
+                        var components = modal.Data.Components.ToList();
+                        string rawRating = components.FirstOrDefault(x => x.CustomId == "star_rating")?.Value ?? "5";
+                        string feedback = components.FirstOrDefault(x => x.CustomId == "review_feedback")?.Value ?? "لا يوجد تعليق.";
+
+                        // تحويل الرقم إلى نجوم
+                        int.TryParse(rawRating, out int starsCount);
+                        if (starsCount < 1) starsCount = 1;
+                        if (starsCount > 5) starsCount = 5;
+
+                        string starsDisplay = new string('⭐', starsCount);
+
+                        // بناء كرت التقييم الفخم
+                        var reviewEmbed = new EmbedBuilder()
+                            .WithTitle("🌟 تقييم جديد لخدمة BaderTweaker")
+                            .WithColor(new Color(255, 215, 0)) // لون ذهبي
+                            .AddField("👤 العميل", user.Mention, inline: true)
+                            .AddField("⭐ التقييم", $"{starsDisplay} ({starsCount}/5)", inline: true)
+                            .AddField("💬 رأي وانطباع العميل", feedback)
+                            .WithThumbnailUrl(user.GetAvatarUrl() ?? user.GetDefaultAvatarUrl())
+                            .WithFooter("BaderTweaker Customer Reviews")
+                            .WithCurrentTimestamp()
+                            .Build();
+
+                        // البحث عن شات التقييمات عبر الـ ID أو بالاسم تلقائياً
+                        var reviewChannel = guild.GetTextChannel(ClientReviewsChannelId) 
+                                           ?? guild.TextChannels.FirstOrDefault(c => c.Name.Contains("client-reviews") || c.Name.Contains("التقييمات"));
+
+                        if (reviewChannel != null)
+                        {
+                            await reviewChannel.SendMessageAsync(embed: reviewEmbed);
+                            await modal.FollowupAsync("✅ شكرًا لك! تم إرسال تقييمك ونشره بنجاح في شات التقييمات.", ephemeral: true);
+                        }
+                        else
+                        {
+                            await modal.FollowupAsync("✅ تم تسجيل تقييمك بنجاح! (تنبيه: لم يتم العثور على شات التقييمات لنشره تلقائياً).", ephemeral: true);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Modal Error]: {ex.Message}");
                 }
             });
 
